@@ -1,4 +1,5 @@
 {-# LANGUAGE CPP #-}
+{-# LANGUAGE ViewPatterns #-}
 
 -- | A simple string substitution library that supports \"$\"-based
 -- substitution. Substitution uses the following rules:
@@ -56,7 +57,7 @@ import Data.Maybe (fromJust, isJust)
 import Data.Monoid (Monoid(mempty, mappend))
 import Data.Traversable (traverse)
 import Prelude hiding (takeWhile)
-
+import qualified Data.Text.Builder.Linear as TB
 #ifdef HAVE_SEMIGROUP
 import Data.Semigroup (Semigroup)
 import qualified Data.Semigroup as Semigroup
@@ -64,6 +65,8 @@ import qualified Data.Semigroup as Semigroup
 
 import qualified Data.Text as T
 import qualified Data.Text.Lazy as LT
+import Data.Text (Text)
+import Data.Foldable (Foldable (foldMap'))
 
 -- -----------------------------------------------------------------------------
 
@@ -110,7 +113,7 @@ showTemplate :: Template -> T.Text
 showTemplate (Template fs) = T.concat $ map showFrag fs
 
 -- | A template fragment.
-data Frag = Lit {-# UNPACK #-} !T.Text | Var {-# UNPACK #-} !T.Text !Bool
+data Frag = Lit {-# UNPACK #-} !TB.Builder | Var {-# UNPACK #-} !T.Text !Bool
 
 instance Show Frag where
     show = T.unpack . showFrag
@@ -119,15 +122,15 @@ showFrag :: Frag -> T.Text
 showFrag (Var s b)
     | b          = T.concat [T.pack "${", s, T.pack "}"]
     | otherwise  = T.concat [T.pack "$", s]
-showFrag (Lit s) = T.concatMap escape s
-    where escape '$' = T.pack "$$"
-          escape c   = T.singleton c
+showFrag (Lit s) = T.pack $ concatMap escape $ show s
+    where escape '$' = "$$"
+          escape c   = [c]
 
 -- | A mapping from placeholders in the template to values.
-type Context = T.Text -> T.Text
+type Context = T.Text -> TB.Builder
 
 -- | Like 'Context', but with an applicative lookup function.
-type ContextA f = T.Text -> f T.Text
+type ContextA f = T.Text -> f TB.Builder
 
 -- -----------------------------------------------------------------------------
 -- Basic interface
@@ -154,7 +157,7 @@ combineLits xs =
     in case lits of
          []    -> gatherVars xs'
          [lit] -> lit : gatherVars xs'
-         _     -> Lit (T.concat (map fromLit lits)) : gatherVars xs'
+         _     -> Lit (foldMap' id $  (map fromLit lits)) : gatherVars xs'
   where
     gatherVars [] = []
     gatherVars ys =
@@ -170,8 +173,9 @@ combineLits xs =
     fromLit _       = undefined
 
 -- | Perform the template substitution, returning a new 'LT.Text'.
-render :: Template -> Context -> LT.Text
-render (Template frags) ctxFunc = LT.fromChunks $ map renderFrag frags
+render :: Template -> Context -> Text
+{-# INLINE render #-}
+render (Template frags) ctxFunc = TB.runBuilder . foldMap' id $ map renderFrag frags
   where
     renderFrag (Lit s)   = s
     renderFrag (Var x _) = ctxFunc x
@@ -188,8 +192,9 @@ render (Template frags) ctxFunc = LT.fromChunks $ map renderFrag frags
 --
 -- will return 'Nothing' if any of the placeholders in the template
 -- don't appear in @ctx@ and @Just text@ otherwise.
-renderA :: Applicative f => Template -> ContextA f -> f LT.Text
-renderA (Template frags) ctxFunc = LT.fromChunks <$> traverse renderFrag frags
+renderA :: Applicative f => Template -> ContextA f -> f Text
+{-# INLINE renderA #-}
+renderA (Template frags) ctxFunc = TB.runBuilder . foldMap' id <$> traverse renderFrag frags
   where
     renderFrag (Lit s)   = pure s
     renderFrag (Var x _) = ctxFunc x
@@ -198,14 +203,16 @@ renderA (Template frags) ctxFunc = LT.fromChunks <$> traverse renderFrag frags
 -- malformed template string will raise an 'error'.  Note that
 --
 -- > substitute tmpl ctx == render (template tmpl) ctx
-substitute :: T.Text -> Context -> LT.Text
+substitute :: T.Text -> Context -> Text
+{-# INLINE substitute #-}
 substitute = render . template
 
 -- | Perform the template substitution in the given 'Applicative',
 -- returning a new 'LT.Text'. Note that
 --
 -- > substituteA tmpl ctx == renderA (template tmpl) ctx
-substituteA :: Applicative f => T.Text -> ContextA f -> f LT.Text
+substituteA :: Applicative f => T.Text -> ContextA f -> f Text
+{-# INLINE substituteA #-}
 substituteA = renderA . template
 
 -- -----------------------------------------------------------------------------
@@ -219,7 +226,7 @@ pFrags = do
       Just '$' -> do c' <- peekSnd
                      case c' of
                        Just '$' -> do discard 2
-                                      continue (return $ Lit $ T.pack "$")
+                                      continue (return $ Lit $ TB.fromChar '$')
                        _        -> continue pVar
       _        -> continue pLit
   where
@@ -235,7 +242,7 @@ pFragsSafe = pFragsSafe' []
           Just '$' -> do c' <- peekSnd
                          case c' of
                            Just '$' -> do discard 2
-                                          continue (Lit $ T.pack "$")
+                                          continue (Lit $ TB.fromChar '$')
                            _        -> do e <- pVarSafe
                                           either abort continue e
           _        -> do l <- pLit
@@ -293,7 +300,7 @@ pIdentifierSafe = do
 pLit :: Parser Frag
 pLit = do
     s <- takeWhile (/= '$')
-    return $ Lit s
+    return $ Lit $ TB.fromText s
 
 isIdentifier0 :: Char -> Bool
 isIdentifier0 c = or [isLower c, c == '_']
