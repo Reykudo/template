@@ -1,0 +1,44 @@
+name: template
+version: 0.1.0.0
+github: "githubuser/lynx"
+license: BSD3
+author: "Author name here"
+maintainer: "example@example.com"
+copyright: "2021 Author name here"
+
+extra-source-files:
+  - README.md
+
+dependencies:
+  - base >= 4 && < 5
+  - text ^>= 2
+  - mtl
+  - text-builder-linear
+
+language: GHC2021
+
+ghc-options:
+  - -Wall
+
+library:
+  source-dirs: src
+  default-extensions:
+    - ViewPatterns
+    - OverloadedStrings
+  ghc-options:
+    - -funbox-strict-fields
+
+executables:
+  hello-exe:
+    main: Main.hs
+    source-dirs: examples
+    default-extensions:
+      - ViewPatterns
+      - OverloadedStrings
+    dependencies:
+      - base >=4.7 && <5
+      - bytestring
+      - template
+
+
+
